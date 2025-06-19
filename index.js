@@ -9,15 +9,8 @@ const fs = require('fs'); // To read the CSS file
 
 const authMiddleware = require('./authMiddleware');
 let serviceAccount;
+serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
 
-const serviceAccountFromFile = require('./serviceAccountKey.json');
-if (process.env.FIREBASE_SERVICE_ACCOUNT) {
-  
-  serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
-} else {
-  // In local development, use the file
-  serviceAccount = serviceAccountFromFile;
-}
 
 // --- INITIALIZATION ---
 admin.initializeApp({

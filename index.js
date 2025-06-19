@@ -3,10 +3,10 @@ require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
 const admin = require('firebase-admin');
-const puppeteer = require('puppeteer');
 const MarkdownIt = require('markdown-it');
 const fs = require('fs'); // To read the CSS file
-
+const puppeteer = require('puppeteer-core');
+const chromium = require('@sparticuz/chromium');
 const authMiddleware = require('./authMiddleware');
 let serviceAccount;
 serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
@@ -150,8 +150,9 @@ app.delete('/api/documents/:id', authMiddleware, async (req, res) => {
 
 
 // === PDF GENERATION ROUTE ===
-
 app.post('/api/generate-pdf', authMiddleware, async (req, res) => {
+  let browser = null; // Define browser outside the try block
+
   try {
     const { markdownContent, filename } = req.body;
     if (!markdownContent) {
@@ -168,7 +169,6 @@ app.post('/api/generate-pdf', authMiddleware, async (req, res) => {
           <style>${pdfStyles}</style>
         </head>
         <body>
-          <!-- Add the wrapper div with the required class -->
           <div class="resume-preview">
             ${htmlContent}
           </div>
@@ -176,13 +176,27 @@ app.post('/api/generate-pdf', authMiddleware, async (req, res) => {
       </html>
     `;
     
-    const browser = await puppeteer.launch({ headless: 'new' });
+    browser = await puppeteer.launch({
+      args: chromium.args,
+      defaultViewport: chromium.defaultViewport,
+      executablePath: await chromium.executablePath(),
+      headless: chromium.headless,
+      ignoreHTTPSErrors: true,
+    });
+
     const page = await browser.newPage();
     
     await page.setContent(fullHtml, { waitUntil: 'networkidle0' });
-    const pdfBuffer = await page.pdf({ format: 'A4', printBackground: true });
-    
-    await browser.close();
+    const pdfBuffer = await page.pdf({ 
+        format: 'A4', 
+        printBackground: true,
+        margin: {
+            top: '30px',
+            right: '30px',
+            bottom: '30px',
+            left: '30px'
+        }
+    });
 
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader('Content-Disposition', `attachment; filename=${filename || 'document.pdf'}`);
@@ -191,6 +205,11 @@ app.post('/api/generate-pdf', authMiddleware, async (req, res) => {
   } catch (error) {
     console.error('Error generating PDF:', error);
     res.status(500).send({ message: 'Error generating PDF.' });
+  } finally {
+    // Ensure the browser is always closed, even if an error occurred
+    if (browser !== null) {
+      await browser.close();
+    }
   }
 });
 

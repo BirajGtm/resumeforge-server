@@ -23,10 +23,23 @@ const app = express();
 const PORT = process.env.PORT || 5001;
 
 // --- MIDDLEWARE ---
+const allowedOrigins = [
+  process.env.FRONTEND_URL,   // Your deployed Netlify URL
+  'http://localhost:5173'     // Your local development URL
+];
+
 const corsOptions = {
-    origin: process.env.FRONTEND_URL || 'http://localhost:5173'
+  origin: function (origin, callback) {
+    // The 'origin' is the URL of the site making the request.
+    // Allow requests with no origin (like mobile apps or Postman)
+    if (!origin || allowedOrigins.indexOf(origin) !== -1) {
+      callback(null, true);
+    } else {
+      callback(new Error('Not allowed by CORS'));
+    }
+  }
 };
-// app.use(cors(corsOptions));
+app.use(cors(corsOptions));
 app.use(express.json());
 
 // --- ROUTES ---

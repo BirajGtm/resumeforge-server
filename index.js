@@ -37,7 +37,14 @@ app.use(cors(corsOptions));
 app.use(express.json());
 
 // --- ROUTES ---
-
+app.get('/', (req, res) => {
+  res.status(200).json({
+    message: 'Welcome to the ResumeForge API!',
+    status: 'Service is running',
+    timestamp: new Date().toISOString(),
+    documentation: 'For API usage, please refer to the project documentation.'
+  });
+});
 // === DOCUMENT CRUD ROUTES ===
 
 // GET all documents for the logged-in user

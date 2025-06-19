@@ -3,16 +3,17 @@ require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
 const admin = require('firebase-admin');
-const MarkdownIt = require('markdown-it');
-const fs = require('fs'); // To read the CSS file
-const puppeteer = require('puppeteer-core');
+const puppeteer = require('puppeteer');
 const chromium = require('@sparticuz/chromium');
+const fs = require('fs');
+const MarkdownIt = require('markdown-it');
+
 const authMiddleware = require('./authMiddleware');
+
+// --- Initialization ---
 let serviceAccount;
 serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
 
-
-// --- INITIALIZATION ---
 admin.initializeApp({
   credential: admin.credential.cert(serviceAccount),
 });
@@ -24,8 +25,8 @@ const PORT = process.env.PORT || 5001;
 
 // --- MIDDLEWARE ---
 const allowedOrigins = [
-  process.env.FRONTEND_URL,   // Your deployed Netlify URL
-  'http://localhost:5173'     // Your local development URL
+  process.env.FRONTEND_URL,   //  deployed Netlify URL
+  'http://localhost:5173'     //  local development URL
 ];
 
 const corsOptions = {
@@ -39,9 +40,33 @@ const corsOptions = {
     }
   }
 };
-app.use(cors(corsOptions));
-app.use(express.json());
+// --- Middleware ---
+app.use(cors(corsOptions)); 
+app.use(express.json({ limit: '5mb' })); // Increase payload limit for large resumes
 
+// --- CHANGE 1: Global variable to hold the single browser instance ---
+let browserInstance;
+
+// --- CHANGE 2: Function to start and configure the browser once ---
+async function startBrowser() {
+  let browserOptions;
+  if (process.env.RENDER) {
+    console.log('Initializing browser for production (Render)...');
+    browserOptions = {
+      args: chromium.args,
+      defaultViewport: chromium.defaultViewport,
+      executablePath: await chromium.executablePath,
+      headless: chromium.headless,
+    };
+  } else {
+    console.log('Initializing browser for local development...');
+    browserOptions = {
+      headless: true,
+    };
+  }
+  browserInstance = await puppeteer.launch(browserOptions);
+  console.log('Browser initialized successfully.');
+}
 // --- ROUTES ---
 app.get('/', (req, res) => {
   res.status(200).json({
@@ -151,51 +176,28 @@ app.delete('/api/documents/:id', authMiddleware, async (req, res) => {
 
 // === PDF GENERATION ROUTE ===
 app.post('/api/generate-pdf', authMiddleware, async (req, res) => {
-  let browser = null; // Define browser outside the try block
+  let page = null; // A page is created for each request, not a whole browser
 
   try {
     const { markdownContent, filename } = req.body;
     if (!markdownContent) {
-        return res.status(400).send({ message: 'Markdown content is required.' });
+      return res.status(400).send({ message: 'Markdown content is required.' });
     }
 
     const htmlContent = md.render(markdownContent);
     const pdfStyles = fs.readFileSync('./pdf-styles.css', 'utf8');
-
     const fullHtml = `
-      <!DOCTYPE html>
-      <html>
-        <head>
-          <style>${pdfStyles}</style>
-        </head>
-        <body>
-          <div class="resume-preview">
-            ${htmlContent}
-          </div>
-        </body>
-      </html>
-    `;
-    
-    browser = await puppeteer.launch({
-      args: chromium.args,
-      defaultViewport: chromium.defaultViewport,
-      executablePath: await chromium.executablePath(),
-      headless: chromium.headless,
-      ignoreHTTPSErrors: true,
-    });
+      <!DOCTYPE html><html><head><style>${pdfStyles}</style></head>
+      <body><div class="resume-preview">${htmlContent}</div></body></html>`;
 
-    const page = await browser.newPage();
-    
+    // --- CHANGE 3: Use the single browser instance to create a new page ("tab") ---
+    page = await browserInstance.newPage();
+
     await page.setContent(fullHtml, { waitUntil: 'networkidle0' });
-    const pdfBuffer = await page.pdf({ 
-        format: 'A4', 
+    const pdfBuffer = await page.pdf({
+        format: 'A4',
         printBackground: true,
-        margin: {
-            top: '30px',
-            right: '30px',
-            bottom: '30px',
-            left: '30px'
-        }
+        margin: { top: '30px', right: '30px', bottom: '30px', left: '30px' }
     });
 
     res.setHeader('Content-Type', 'application/pdf');
@@ -206,14 +208,25 @@ app.post('/api/generate-pdf', authMiddleware, async (req, res) => {
     console.error('Error generating PDF:', error);
     res.status(500).send({ message: 'Error generating PDF.' });
   } finally {
-    // Ensure the browser is always closed, even if an error occurred
-    if (browser !== null) {
-      await browser.close();
+    // --- CHANGE 4: Critical step! Always close the page to free up memory. ---
+    if (page) {
+      await page.close();
     }
   }
 });
 
-// --- SERVER LISTENER ---
-app.listen(PORT, () => {
-  console.log(`Server is running on http://localhost:${PORT}`);
-});
+// This ensures the browser is ready before we start accepting requests.
+async function startServer() {
+  try {
+    await startBrowser();
+    app.listen(PORT, () => {
+      console.log(`Server is listening on http://localhost:${PORT}`);
+    });
+  } catch (error) {
+    console.error('Failed to start the server or browser:', error);
+    process.exit(1);
+  }
+}
+
+// Start the application
+startServer();

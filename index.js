@@ -26,7 +26,7 @@ const PORT = process.env.PORT || 5001;
 const corsOptions = {
     origin: process.env.FRONTEND_URL || 'http://localhost:5173'
 };
-app.use(cors(corsOptions));
+// app.use(cors(corsOptions));
 app.use(express.json());
 
 // --- ROUTES ---

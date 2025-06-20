@@ -49,28 +49,29 @@ app.use(express.json({ limit: '5mb' }));
 let browserInstance;
 
 // startBrowser function that handles both environments ---
+// --- The Final, Correct startBrowser function ---
 async function startBrowser() {
   let browserOptions;
   if (process.env.RENDER) {
-    // THIS PART IS FOR RENDER - IT'S ALREADY CORRECT
     console.log('Initializing browser for production (Render)...');
+
+    // --- FIX #1: Get the 'default' export from the dynamic import ---
+    const chromium = (await import('@sparticuz/chromium')).default;
+
     browserOptions = {
       args: chromium.args,
       defaultViewport: chromium.defaultViewport,
-      executablePath: await chromium.executablePath(),
+      // --- FIX #2: Access 'executablePath' as a property, not a function ---
+      executablePath: chromium.executablePath, // REMOVED await and ()
       headless: "new",
       ignoreHTTPSErrors: true,
     };
   } else {
-
     console.log('Initializing browser for local development...');
-    
-    // --- FIX FOR LOCAL DEVELOPMENT ---
-    // puppeteer-core needs to be told where to find a browser.
-    // The 'channel' option is the easiest way to do this.
+    // Local development part remains the same and is correct
     browserOptions = {
-        headless: "new",
-        channel: 'chrome' // This tells Puppeteer to find your locally installed Chrome browser
+      headless: "new",
+      channel: 'chrome',
     };
   }
   browserInstance = await puppeteer.launch(browserOptions);

@@ -1,5 +1,5 @@
 # Use an official Node.js runtime as a parent image
-FROM node:18-slim
+FROM node:24.2.0-slim
 
 # Install Google Chrome's dependencies
 # This is the magic part that installs the libraries Puppeteer needs

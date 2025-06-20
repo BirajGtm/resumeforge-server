@@ -5,7 +5,7 @@ const cors = require('cors');
 const admin = require('firebase-admin');
 // --- CHANGE 1: Use puppeteer-core which is lighter and expects a provided browser ---
 const puppeteer = require('puppeteer-core');
-const chromium = require('@sparticuz/chromium');
+const chromium  = require('@sparticuz/chromium');
 const fs = require('fs');
 const MarkdownIt = require('markdown-it');
 
@@ -50,32 +50,24 @@ let browserInstance;
 
 // startBrowser function that handles both environments ---
 // --- The Final, Correct startBrowser function ---
-async function startBrowser() {
-  let browserOptions;
-  if (process.env.RENDER) {
-    console.log('Initializing browser for production (Render)...');
+async function startBrowser () {
+  const runningOnRender = !!process.env.RENDER;
 
-    // --- FIX #1: Get the 'default' export from the dynamic import ---
-    const chromium = (await import('@sparticuz/chromium')).default;
+  const browserOptions = runningOnRender
+    ? {                          // production
+        args: [...chromium.args, '--no-sandbox', '--disable-setuid-sandbox'],
+        defaultViewport: chromium.defaultViewport,
+        executablePath: await chromium.executablePath(), // <-- key line
+        headless: 'shell',        // or true
+        ignoreHTTPSErrors: true,
+      }
+    : {                          // local dev
+        headless: 'shell',
+        channel: 'chrome',
+      };
 
-    browserOptions = {
-      args: chromium.args,
-      defaultViewport: chromium.defaultViewport,
-      // --- FIX #2: Access 'executablePath' as a property, not a function ---
-      executablePath: chromium.executablePath, // REMOVED await and ()
-      headless: "new",
-      ignoreHTTPSErrors: true,
-    };
-  } else {
-    console.log('Initializing browser for local development...');
-    // Local development part remains the same and is correct
-    browserOptions = {
-      headless: "new",
-      channel: 'chrome',
-    };
-  }
   browserInstance = await puppeteer.launch(browserOptions);
-  console.log('Browser initialized successfully.');
+  console.log('Browser initialized.');
 }
 
 //   ROUTES: / , /api/documents, etc. 

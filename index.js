@@ -3,7 +3,8 @@ require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
 const admin = require('firebase-admin');
-const puppeteer = require('puppeteer');
+// --- CHANGE 1: Use puppeteer-core which is lighter and expects a provided browser ---
+const puppeteer = require('puppeteer-core');
 const chromium = require('@sparticuz/chromium');
 const fs = require('fs');
 const MarkdownIt = require('markdown-it');
@@ -12,7 +13,11 @@ const authMiddleware = require('./authMiddleware');
 
 // --- Initialization ---
 let serviceAccount;
-serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
+// if (process.env.FIREBASE_SERVICE_ACCOUNT) {
+  serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
+// } else {
+//   serviceAccount = require('./serviceAccountKey.json');
+// }
 
 admin.initializeApp({
   credential: admin.credential.cert(serviceAccount),
@@ -23,16 +28,13 @@ const md = new MarkdownIt();
 const app = express();
 const PORT = process.env.PORT || 5001;
 
-// --- MIDDLEWARE ---
+// --- Middleware ---
 const allowedOrigins = [
-  process.env.FRONTEND_URL,   //  deployed Netlify URL
-  'http://localhost:5173'     //  local development URL
+  process.env.FRONTEND_URL,
+  'http://localhost:5173'
 ];
-
 const corsOptions = {
   origin: function (origin, callback) {
-    // The 'origin' is the URL of the site making the request.
-    // Allow requests with no origin (like mobile apps or Postman)
     if (!origin || allowedOrigins.indexOf(origin) !== -1) {
       callback(null, true);
     } else {
@@ -40,34 +42,42 @@ const corsOptions = {
     }
   }
 };
-// --- Middleware ---
-app.use(cors(corsOptions)); 
-app.use(express.json({ limit: '5mb' })); // Increase payload limit for large resumes
+app.use(cors(corsOptions));
+app.use(express.json({ limit: '5mb' }));
 
-// --- CHANGE 1: Global variable to hold the single browser instance ---
+// --- Global browser instance ---
 let browserInstance;
 
-// --- CHANGE 2: Function to start and configure the browser once ---
+// startBrowser function that handles both environments ---
 async function startBrowser() {
   let browserOptions;
   if (process.env.RENDER) {
+    // THIS PART IS FOR RENDER - IT'S ALREADY CORRECT
     console.log('Initializing browser for production (Render)...');
     browserOptions = {
       args: chromium.args,
       defaultViewport: chromium.defaultViewport,
-      executablePath: await chromium.executablePath,
-      headless: chromium.headless,
+      executablePath: await chromium.executablePath(),
+      headless: "new",
+      ignoreHTTPSErrors: true,
     };
   } else {
+
     console.log('Initializing browser for local development...');
+    
+    // --- FIX FOR LOCAL DEVELOPMENT ---
+    // puppeteer-core needs to be told where to find a browser.
+    // The 'channel' option is the easiest way to do this.
     browserOptions = {
-      headless: true,
+        headless: "new",
+        channel: 'chrome' // This tells Puppeteer to find your locally installed Chrome browser
     };
   }
   browserInstance = await puppeteer.launch(browserOptions);
   console.log('Browser initialized successfully.');
 }
-// --- ROUTES ---
+
+//   ROUTES: / , /api/documents, etc. 
 app.get('/', (req, res) => {
   res.status(200).json({
     message: 'Welcome to the ResumeForge API!',
@@ -76,9 +86,6 @@ app.get('/', (req, res) => {
     documentation: 'For API usage, please refer to the project documentation.'
   });
 });
-// === DOCUMENT CRUD ROUTES ===
-
-// GET all documents for the logged-in user
 app.get('/api/documents', authMiddleware, async (req, res) => {
   try {
     const { uid } = req.user;
@@ -93,8 +100,6 @@ app.get('/api/documents', authMiddleware, async (req, res) => {
     res.status(500).send({ message: 'Error fetching documents' });
   }
 });
-
-// POST a new document
 app.post('/api/documents', authMiddleware, async (req, res) => {
   try {
     const { uid } = req.user;
@@ -116,8 +121,6 @@ app.post('/api/documents', authMiddleware, async (req, res) => {
     res.status(500).send({ message: 'Error creating document' });
   }
 });
-
-// PUT (Update) a specific document
 app.put('/api/documents/:id', authMiddleware, async (req, res) => {
     try {
         const { uid } = req.user;
@@ -130,12 +133,9 @@ app.put('/api/documents/:id', authMiddleware, async (req, res) => {
         if (!doc.exists) {
             return res.status(404).send({ message: 'Document not found.' });
         }
-
-        // Security check: ensure the user owns this document
         if (doc.data().userId !== uid) {
             return res.status(403).send({ message: 'Forbidden: You do not own this document.' });
         }
-
         await docRef.update(data);
         res.status(200).json({ message: 'Document updated successfully.' });
 
@@ -144,9 +144,6 @@ app.put('/api/documents/:id', authMiddleware, async (req, res) => {
         res.status(500).send({ message: 'Error updating document.' });
     }
 });
-
-
-// DELETE a specific document
 app.delete('/api/documents/:id', authMiddleware, async (req, res) => {
   try {
     const { uid } = req.user;
@@ -158,12 +155,9 @@ app.delete('/api/documents/:id', authMiddleware, async (req, res) => {
     if (!doc.exists) {
       return res.status(404).send({ message: 'Document not found.' });
     }
-
-    // Security check: ensure the user owns this document
     if (doc.data().userId !== uid) {
       return res.status(403).send({ message: 'Forbidden: You do not own this document.' });
     }
-
     await docRef.delete();
     res.status(200).json({ message: 'Document deleted successfully.' });
 
@@ -173,10 +167,9 @@ app.delete('/api/documents/:id', authMiddleware, async (req, res) => {
   }
 });
 
-
-// === PDF GENERATION ROUTE ===
+// === PDF GENERATION ROUTE (NO CHANGES NEEDED HERE) ===
 app.post('/api/generate-pdf', authMiddleware, async (req, res) => {
-  let page = null; // A page is created for each request, not a whole browser
+  let page = null;
 
   try {
     const { markdownContent, filename } = req.body;
@@ -190,7 +183,7 @@ app.post('/api/generate-pdf', authMiddleware, async (req, res) => {
       <!DOCTYPE html><html><head><style>${pdfStyles}</style></head>
       <body><div class="resume-preview">${htmlContent}</div></body></html>`;
 
-    // --- CHANGE 3: Use the single browser instance to create a new page ("tab") ---
+    // Use the single browser instance to create a new page
     page = await browserInstance.newPage();
 
     await page.setContent(fullHtml, { waitUntil: 'networkidle0' });
@@ -205,17 +198,17 @@ app.post('/api/generate-pdf', authMiddleware, async (req, res) => {
     res.send(pdfBuffer);
 
   } catch (error) {
+    // IMPORTANT: Check  Render logs for the output of this error!
     console.error('Error generating PDF:', error);
     res.status(500).send({ message: 'Error generating PDF.' });
   } finally {
-    // --- CHANGE 4: Critical step! Always close the page to free up memory. ---
     if (page) {
       await page.close();
     }
   }
 });
 
-// This ensures the browser is ready before we start accepting requests.
+// --- Server Startup ---
 async function startServer() {
   try {
     await startBrowser();
@@ -228,5 +221,4 @@ async function startServer() {
   }
 }
 
-// Start the application
 startServer();

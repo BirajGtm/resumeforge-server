@@ -5,73 +5,76 @@ html, body {
     margin: 0;
     padding: 0;
     background-color: #fff !important;
-    font-size: 10pt;
+    /* --- FONT SIZE ADJUSTMENT --- */
+    font-size: 11pt; /* FROM: 10pt */
 }
 
-/* --- THE DEFINITIVE FIX --- */
+/* --- MARGIN AND SPACING ADJUSTMENT --- */
 /* This rule applies a margin to EVERY page of the PDF document. */
 @page {
-    margin: 30px;
+    margin: 40px; /* FROM: 30px */
 }
-/* -------------------------- */
 
 .resume-preview {
     font-family: 'Calibri', 'Segoe UI', 'Roboto', 'Helvetica Neue', sans-serif;
     color: #111;
-    font-size: 10pt;
+    /* --- FONT SIZE ADJUSTMENT --- */
+    font-size: 11pt; /* FROM: 10pt */
     line-height: 1.4;
-    
-    /* REMOVED padding from here, as @page now handles it */
 }
 
-/* ... the rest of the file remains the same ... */
-
+/* --- FONT SIZE ADJUSTMENT --- */
 .resume-preview h1 {
     text-align: center;
-    font-size: 18pt;
+    font-size: 20pt; /* FROM: 18pt */
     font-weight: bold;
     margin: 0 0 2px 0;
     padding: 0;
 }
 
+/* --- FONT SIZE & SPACING ADJUSTMENTS --- */
 .resume-preview h1 + p {
     text-align: center;
-    font-size: 9pt;
-    margin: 0 0 5px 0;
+    font-size: 10pt; /* FROM: 9pt */
+    margin: 0 0 10px 0; /* FROM: 5px */
 }
 
 .resume-preview hr {
     display: none;
 }
 
+/* --- FONT SIZE & SPACING ADJUSTMENTS --- */
 .resume-preview h2 {
-    font-size: 11pt;
+    font-size: 13pt; /* FROM: 11pt */
     font-weight: bold;
     text-transform: uppercase;
     border-bottom: 1px solid #ccc;
     padding-bottom: 2px;
-    margin-top: 12px;
-    margin-bottom: 8px;
+    margin-top: 15px; /* FROM: 12px */
+    margin-bottom: 10px; /* FROM: 8px */
 }
 
+/* --- FONT SIZE & SPACING ADJUSTMENTS --- */
 .resume-preview h3 {
-    font-size: 10pt;
+    font-size: 11pt; /* FROM: 10pt */
     font-weight: bold;
-    margin: 10px 0 2px 0;
+    margin: 12px 0 4px 0; /* FROM: 10px 0 2px 0 */
     padding: 0;
 }
 
+/* --- SPACING ADJUSTMENT --- */
 .resume-preview p {
-    margin: 0 0 8px 0;
+    margin: 0 0 10px 0; /* FROM: 8px */
 }
 
 .resume-preview ul {
-    padding-left: 18px;
+    padding-left: 20px; /* FROM: 18px */
     margin: 0;
 }
 
+/* --- SPACING ADJUSTMENT --- */
 .resume-preview li {
-    margin-bottom: 4px;
+    margin-bottom: 5px; /* FROM: 4px */
 }
 
 .resume-preview i, .resume-preview em {

@@ -3,21 +3,22 @@ require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
 const admin = require('firebase-admin');
-// --- CHANGE 1: Use puppeteer-core which is lighter and expects a provided browser ---
-const puppeteer = require('puppeteer-core');
-const chromium  = require('@sparticuz/chromium');
 const fs = require('fs');
 const MarkdownIt = require('markdown-it');
+// --- CHANGE 1: Import the new, lightweight library ---
+const wkhtmltopdf = require('wkhtmltopdf');
 
 const authMiddleware = require('./authMiddleware');
 
 // --- Initialization ---
 let serviceAccount;
-// if (process.env.FIREBASE_SERVICE_ACCOUNT) {
+// The 'if/else' for local vs. deployed service account is good practice, I've restored it.
+if (process.env.FIREBASE_SERVICE_ACCOUNT) {
   serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
-// } else {
-//   serviceAccount = require('./serviceAccountKey.json');
-// }
+} else {
+  // This allows you to run the server locally with a file
+  serviceAccount = require('./serviceAccountKey.json');
+}
 
 admin.initializeApp({
   credential: admin.credential.cert(serviceAccount),
@@ -45,32 +46,12 @@ const corsOptions = {
 app.use(cors(corsOptions));
 app.use(express.json({ limit: '5mb' }));
 
-// --- Global browser instance ---
-let browserInstance;
+// --- CHANGE 2: The entire browser section is GONE ---
+// No more global browserInstance variable.
+// No more startBrowser function.
 
-// startBrowser function that handles both environments ---
-// --- The Final, Correct startBrowser function ---
-async function startBrowser () {
-  const runningOnRender = !!process.env.RENDER;
-
-  const browserOptions = runningOnRender
-    ? {                          // production
-        args: [...chromium.args, '--no-sandbox', '--disable-setuid-sandbox'],
-        defaultViewport: chromium.defaultViewport,
-        executablePath: await chromium.executablePath(), // <-- key line
-        headless: 'shell',        // or true
-        ignoreHTTPSErrors: true,
-      }
-    : {                          // local dev
-        headless: 'shell',
-        channel: 'chrome',
-      };
-
-  browserInstance = await puppeteer.launch(browserOptions);
-  console.log('Browser initialized.');
-}
-
-//   ROUTES: / , /api/documents, etc. 
+// --- ROUTES ---
+// Your existing CRUD routes for documents do not need any changes.
 app.get('/', (req, res) => {
   res.status(200).json({
     message: 'Welcome to the ResumeForge API!',
@@ -97,7 +78,6 @@ app.post('/api/documents', authMiddleware, async (req, res) => {
   try {
     const { uid } = req.user;
     const { companyName, positionName, resumeMarkdown, coverLetterMarkdown } = req.body;
-
     const newDoc = {
       userId: uid,
       companyName,
@@ -106,7 +86,6 @@ app.post('/api/documents', authMiddleware, async (req, res) => {
       coverLetterMarkdown,
       createdAt: admin.firestore.FieldValue.serverTimestamp(),
     };
-
     const docRef = await db.collection('documents').add(newDoc);
     res.status(201).json({ id: docRef.id, ...newDoc });
   } catch (error) {
@@ -119,10 +98,8 @@ app.put('/api/documents/:id', authMiddleware, async (req, res) => {
         const { uid } = req.user;
         const docId = req.params.id;
         const data = req.body;
-
         const docRef = db.collection('documents').doc(docId);
         const doc = await docRef.get();
-
         if (!doc.exists) {
             return res.status(404).send({ message: 'Document not found.' });
         }
@@ -131,7 +108,6 @@ app.put('/api/documents/:id', authMiddleware, async (req, res) => {
         }
         await docRef.update(data);
         res.status(200).json({ message: 'Document updated successfully.' });
-
     } catch (error) {
         console.error('Error updating document:', error);
         res.status(500).send({ message: 'Error updating document.' });
@@ -141,10 +117,8 @@ app.delete('/api/documents/:id', authMiddleware, async (req, res) => {
   try {
     const { uid } = req.user;
     const docId = req.params.id;
-
     const docRef = db.collection('documents').doc(docId);
     const doc = await docRef.get();
-
     if (!doc.exists) {
       return res.status(404).send({ message: 'Document not found.' });
     }
@@ -153,17 +127,14 @@ app.delete('/api/documents/:id', authMiddleware, async (req, res) => {
     }
     await docRef.delete();
     res.status(200).json({ message: 'Document deleted successfully.' });
-
   } catch (error) {
     console.error('Error deleting document:', error);
     res.status(500).send({ message: 'Error deleting document.' });
   }
 });
 
-// === PDF GENERATION ROUTE (NO CHANGES NEEDED HERE) ===
-app.post('/api/generate-pdf', authMiddleware, async (req, res) => {
-  let page = null;
-
+// === PDF GENERATION ROUTE (Refactored for wkhtmltopdf) ===
+app.post('/api/generate-pdf', authMiddleware, (req, res) => {
   try {
     const { markdownContent, filename } = req.body;
     if (!markdownContent) {
@@ -173,45 +144,31 @@ app.post('/api/generate-pdf', authMiddleware, async (req, res) => {
     const htmlContent = md.render(markdownContent);
     const pdfStyles = fs.readFileSync('./pdf-styles.css', 'utf8');
     const fullHtml = `
-      <!DOCTYPE html><html><head><style>${pdfStyles}</style></head>
+      <!DOCTYPE html><html><head><meta charset="utf-8"><style>${pdfStyles}</style></head>
       <body><div class="resume-preview">${htmlContent}</div></body></html>`;
 
-    // Use the single browser instance to create a new page
-    page = await browserInstance.newPage();
-
-    await page.setContent(fullHtml, { waitUntil: 'networkidle0' });
-    const pdfBuffer = await page.pdf({
-        format: 'A4',
-        printBackground: true,
-        margin: { top: '30px', right: '30px', bottom: '30px', left: '30px' }
-    });
-
+    // --- CHANGE 3: The new, memory-efficient PDF generation ---
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader('Content-Disposition', `attachment; filename=${filename || 'document.pdf'}`);
-    res.send(pdfBuffer);
+
+    // Pipe the PDF output directly to the Express response stream
+    wkhtmltopdf(fullHtml, {
+      pageSize: 'A4',
+      marginTop: '30px',
+      marginRight: '30px',
+      marginBottom: '30px',
+      marginLeft: '30px',
+      disableSmartShrinking: true, // Prevents inconsistent font sizes
+      enableLocalFileAccess: true, // Important for security and finding local assets
+    }).pipe(res);
 
   } catch (error) {
-    // IMPORTANT: Check  Render logs for the output of this error!
     console.error('Error generating PDF:', error);
     res.status(500).send({ message: 'Error generating PDF.' });
-  } finally {
-    if (page) {
-      await page.close();
-    }
   }
 });
 
-// --- Server Startup ---
-async function startServer() {
-  try {
-    await startBrowser();
-    app.listen(PORT, () => {
-      console.log(`Server is listening on http://localhost:${PORT}`);
-    });
-  } catch (error) {
-    console.error('Failed to start the server or browser:', error);
-    process.exit(1);
-  }
-}
-
-startServer();
+// --- CHANGE 4: The server startup is now much simpler ---
+app.listen(PORT, () => {
+  console.log(`Server is listening on http://localhost:${PORT}`);
+});

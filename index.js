@@ -31,7 +31,7 @@ const PORT = process.env.PORT || 5001;
 
 // --- Middleware ---
 const allowedOrigins = [
-  process.env.FRONTEND_URL,
+  "https://resume-forge-app.netlify.app",
   'http://localhost:5173'
 ];
 const corsOptions = {
@@ -74,16 +74,46 @@ app.get('/api/documents', authMiddleware, async (req, res) => {
     res.status(500).send({ message: 'Error fetching documents' });
   }
 });
+
+app.get('/api/documents/:id', authMiddleware, async (req, res) => {
+  try {
+    const { uid } = req.user;
+    const docId = req.params.id;
+
+    const docRef = db.collection('documents').doc(docId);
+    const doc = await docRef.get();
+
+    if (!doc.exists) {
+      // This is a valid case, but shouldn't happen in normal flow
+      return res.status(404).send({ message: 'Document not found.' });
+    }
+
+    // Security check: ensure the user owns this document
+    if (doc.data().userId !== uid) {
+      return res.status(403).send({ message: 'Forbidden: You do not have permission to view this document.' });
+    }
+
+    // If everything is okay, send back the document data
+    res.status(200).json({ id: doc.id, ...doc.data() });
+
+  } catch (error) {
+    console.error('Error fetching single document:', error);
+    res.status(500).send({ message: 'Error fetching document.' });
+  }
+});
+
 app.post('/api/documents', authMiddleware, async (req, res) => {
   try {
     const { uid } = req.user;
-    const { companyName, positionName, resumeMarkdown, coverLetterMarkdown } = req.body;
+    const { companyName, positionName, resumeMarkdown, coverLetterMarkdown, status, notes } = req.body;
     const newDoc = {
       userId: uid,
       companyName,
       positionName,
       resumeMarkdown,
       coverLetterMarkdown,
+      status: status || 'Draft',
+      notes: notes || '',
       createdAt: admin.firestore.FieldValue.serverTimestamp(),
     };
     const docRef = await db.collection('documents').add(newDoc);
@@ -131,6 +161,43 @@ app.delete('/api/documents/:id', authMiddleware, async (req, res) => {
     console.error('Error deleting document:', error);
     res.status(500).send({ message: 'Error deleting document.' });
   }
+});
+
+// Add this new route in server/index.js, probably after your other PUT route.
+
+// PUT (Update) a document's status
+app.put('/api/documents/:id/status', authMiddleware, async (req, res) => {
+    try {
+        const { uid } = req.user;
+        const docId = req.params.id;
+        const { status } = req.body;
+
+        // A list of allowed statuses to prevent invalid data
+        const allowedStatuses = ['Draft', 'Applied', 'Interviewing', 'Offer', 'Rejected'];
+        if (!status || !allowedStatuses.includes(status)) {
+            return res.status(400).send({ message: 'Invalid status provided.' });
+        }
+
+        const docRef = db.collection('documents').doc(docId);
+        const doc = await docRef.get();
+
+        if (!doc.exists) {
+            return res.status(404).send({ message: 'Document not found.' });
+        }
+
+        // Security check: ensure the user owns this document
+        if (doc.data().userId !== uid) {
+            return res.status(403).send({ message: 'Forbidden: You do not own this document.' });
+        }
+
+        // Update only the status field
+        await docRef.update({ status });
+        res.status(200).json({ message: `Document status updated to ${status}.` });
+
+    } catch (error) {
+        console.error('Error updating document status:', error);
+        res.status(500).send({ message: 'Error updating document status.' });
+    }
 });
 
 // === PDF GENERATION ROUTE (Refactored for wkhtmltopdf) ===

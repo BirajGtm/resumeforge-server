@@ -32,7 +32,8 @@ const PORT = process.env.PORT || 5001;
 // --- Middleware ---
 const allowedOrigins = [
   "https://resume-forge-app.netlify.app",
-  'http://localhost:5173'
+  'http://localhost:5173',
+  'https://resume.birajgautam.com.np'
 ];
 const corsOptions = {
   origin: function (origin, callback) {

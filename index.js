@@ -64,11 +64,30 @@ app.get('/', (req, res) => {
 app.get('/api/documents', authMiddleware, async (req, res) => {
   try {
     const { uid } = req.user;
+    const { fields } = req.query;
+    
     const documentsSnapshot = await db.collection('documents').where('userId', '==', uid).get();
-    const documents = documentsSnapshot.docs.map(doc => ({
-      id: doc.id,
-      ...doc.data(),
-    }));
+    
+    let documents;
+    if (fields) {
+      const requestedFields = fields.split(',');
+      documents = documentsSnapshot.docs.map(doc => {
+        const data = doc.data();
+        const filteredDoc = { id: doc.id };
+        requestedFields.forEach(field => {
+          if (field !== 'id' && data.hasOwnProperty(field)) {
+            filteredDoc[field] = data[field];
+          }
+        });
+        return filteredDoc;
+      });
+    } else {
+      documents = documentsSnapshot.docs.map(doc => ({
+        id: doc.id,
+        ...doc.data(),
+      }));
+    }
+    
     res.status(200).json(documents);
   } catch (error) {
     console.error('Error fetching documents:', error);
@@ -124,26 +143,45 @@ app.post('/api/documents', authMiddleware, async (req, res) => {
     res.status(500).send({ message: 'Error creating document' });
   }
 });
+
+
+// put document
 app.put('/api/documents/:id', authMiddleware, async (req, res) => {
     try {
         const { uid } = req.user;
         const docId = req.params.id;
-        const data = req.body;
+        
+        const { companyName, positionName, resumeMarkdown, coverLetterMarkdown, status, notes } = req.body;
+        const updatableData = {
+            companyName,
+            positionName,
+            resumeMarkdown,
+            coverLetterMarkdown,
+            status,
+            notes,
+            updatedAt: admin.firestore.FieldValue.serverTimestamp()
+        };
+
         const docRef = db.collection('documents').doc(docId);
         const doc = await docRef.get();
+
         if (!doc.exists) {
             return res.status(404).send({ message: 'Document not found.' });
         }
         if (doc.data().userId !== uid) {
             return res.status(403).send({ message: 'Forbidden: You do not own this document.' });
         }
-        await docRef.update(data);
+
+        // Update with the sanitized, whitelisted data object
+        await docRef.update(updatableData); 
+        
         res.status(200).json({ message: 'Document updated successfully.' });
     } catch (error) {
         console.error('Error updating document:', error);
         res.status(500).send({ message: 'Error updating document.' });
     }
 });
+
 app.delete('/api/documents/:id', authMiddleware, async (req, res) => {
   try {
     const { uid } = req.user;
@@ -221,14 +259,13 @@ app.post('/api/generate-pdf', authMiddleware, (req, res) => {
 
     // Pipe the PDF output directly to the Express response stream
     wkhtmltopdf(fullHtml, {
-      pageSize: 'A4',
-      marginTop: '30px',
-      marginRight: '30px',
-      marginBottom: '30px',
-      marginLeft: '30px',
-      disableSmartShrinking: true, // Prevents inconsistent font sizes
-      enableLocalFileAccess: true, // Important for security and finding local assets
-    }).pipe(res);
+  pageSize: 'A4',
+  marginTop: '30px',
+  marginRight: '30px',
+  marginBottom: '30px',
+  marginLeft: '30px',
+  disableSmartShrinking: true
+}).pipe(res);
 
   } catch (error) {
     console.error('Error generating PDF:', error);

@@ -5,6 +5,7 @@ const cors = require('cors');
 const admin = require('firebase-admin');
 const fs = require('fs');
 const MarkdownIt = require('markdown-it');
+const crypto = require('crypto');
 // --- CHANGE 1: Import the new, lightweight library ---
 const wkhtmltopdf = require('wkhtmltopdf');
 
@@ -33,7 +34,7 @@ const PORT = process.env.PORT || 5001;
 const allowedOrigins = [
   "https://resume-forge-app.netlify.app",
   'http://localhost:5173',
-  'https://resume.birajgautam.com.np'
+  'https://resume.birajgautam.com.np',
 ];
 const corsOptions = {
   origin: function (origin, callback) {
@@ -270,6 +271,288 @@ app.post('/api/generate-pdf', authMiddleware, (req, res) => {
   } catch (error) {
     console.error('Error generating PDF:', error);
     res.status(500).send({ message: 'Error generating PDF.' });
+  }
+});
+
+// --- Sharing Routes ---
+// Helper: fetch and validate shared document data by token
+async function fetchSharedDocumentData(shareToken) {
+  // Get share record
+  const shareRef = db.collection('shares').doc(shareToken);
+  const shareSnap = await shareRef.get();
+
+  if (!shareSnap.exists) {
+    const e = new Error('Share not found or has expired.');
+    e.status = 404;
+    throw e;
+  }
+
+  const shareData = shareSnap.data();
+
+  // Check if share has expired
+  if (shareData.expiresAt && shareData.expiresAt.toDate && shareData.expiresAt.toDate() < new Date()) {
+    const e = new Error('This share has expired.');
+    e.status = 410;
+    throw e;
+  }
+
+  // Get original document
+  const docRef = db.collection('documents').doc(shareData.documentId);
+  const docSnap = await docRef.get();
+  if (!docSnap.exists) {
+    const e = new Error('Original document not found.');
+    e.status = 404;
+    throw e;
+  }
+
+  const documentData = docSnap.data();
+  const response = {
+    companyName: documentData.companyName,
+    positionName: documentData.positionName
+  };
+
+  // Only include permitted sections based on share configuration
+  if (shareData.config && shareData.config.resumeMarkdown) {
+    response.resumeMarkdown = documentData.resumeMarkdown;
+  }
+  if (shareData.config && shareData.config.coverLetterMarkdown) {
+    response.coverLetterMarkdown = documentData.coverLetterMarkdown;
+  }
+  if (shareData.config && shareData.config.notes) {
+    response.notes = documentData.notes;
+  }
+
+  return response;
+}
+
+// Create or Update a share link for a document
+app.post('/api/documents/:documentId/share', authMiddleware, async (req, res) => {
+  try {
+    const { uid } = req.user;
+    const { documentId } = req.params;
+    const { resumeMarkdown, coverLetterMarkdown, notes } = req.body;
+
+    // Basic input validation
+    const isBool = v => typeof v === 'boolean' || v === undefined || v === null;
+    if (!isBool(resumeMarkdown) || !isBool(coverLetterMarkdown) || !isBool(notes)) {
+      return res.status(400).send({ message: 'Invalid share configuration. Expected boolean values.' });
+    }
+
+    // Verify document ownership
+    const docRef = db.collection('documents').doc(documentId);
+    const doc = await docRef.get();
+
+    if (!doc.exists) {
+      return res.status(404).send({ message: 'Document not found.' });
+    }
+
+    if (doc.data().userId !== uid) {
+      return res.status(403).send({ message: 'Forbidden: You do not own this document.' });
+    }
+
+    // --- UPSERT LOGIC ---
+    // 1. Check if a share already exists for this documentId and user
+    const sharesQuery = db.collection('shares')
+      .where('documentId', '==', documentId)
+      .where('createdBy', '==', uid)
+      .limit(1);
+
+    const sharesSnapshot = await sharesQuery.get();
+
+    const newConfig = {
+      resumeMarkdown: !!resumeMarkdown,
+      coverLetterMarkdown: !!coverLetterMarkdown,
+      notes: !!notes
+    };
+
+    if (!sharesSnapshot.empty) {
+      // --- UPDATE (if exists) ---
+      const existingShare = sharesSnapshot.docs[0];
+      const shareRef = existingShare.ref;
+      const newExpiresAt = admin.firestore.Timestamp.fromDate(
+        new Date(Date.now() + 30 * 24 * 60 * 60 * 1000) // 30 days from now
+      );
+
+      await shareRef.update({
+        config: newConfig,
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        expiresAt: newExpiresAt
+      });
+
+      const shareUrl = `/documents/share/${existingShare.id}`;
+      res.status(200).json({ 
+        shareUrl, message: 'Share link updated.', expiresAt: newExpiresAt.toDate().toISOString() 
+      });
+
+    } else {
+      // --- CREATE (if not exists) ---
+      // Simple rate limit for *new* creations: max 10 shares per user per hour
+      const oneHourAgo = admin.firestore.Timestamp.fromDate(new Date(Date.now() - 60 * 60 * 1000));
+      const recentSharesSnap = await db.collection('shares')
+        .where('createdBy', '==', uid)
+        .where('createdAt', '>=', oneHourAgo)
+        .get();
+      if (recentSharesSnap.size >= 10) {
+        return res.status(429).send({ message: 'Rate limit exceeded: too many new share creations. Try again later.' });
+      }
+
+      const shareToken = crypto.randomBytes(32).toString('hex');
+      const shareData = {
+        documentId,
+        config: newConfig,
+        createdAt: admin.firestore.FieldValue.serverTimestamp(),
+        createdBy: uid,
+        expiresAt: admin.firestore.Timestamp.fromDate(
+          new Date(Date.now() + 30 * 24 * 60 * 60 * 1000) // 30 days from now
+        )
+      };
+
+      await db.collection('shares').doc(shareToken).set(shareData);
+      const shareUrl = `/documents/share/${shareToken}`;
+      res.status(200).json({ 
+        shareUrl, message: 'Share link created.', expiresAt: shareData.expiresAt.toDate().toISOString() 
+      });
+    }
+  } catch (error) {
+    console.error('Error creating share:', error);
+    res.status(500).send({ message: 'Error creating share' });
+  }
+});
+
+// Get the LATEST share for a document (for the share modal)
+app.get('/api/documents/:documentId/share', authMiddleware, async (req, res) => {
+  try {
+    const { uid } = req.user;
+    const { documentId } = req.params;
+
+    // First, verify document ownership for security
+    const docRef = db.collection('documents').doc(documentId);
+    const doc = await docRef.get();
+
+    if (!doc.exists) {
+      return res.status(404).send({ message: 'Document not found.' });
+    }
+
+    if (doc.data().userId !== uid) {
+      return res.status(403).send({ message: 'Forbidden: You do not own this document.' });
+    }
+
+    // Find the most recent share for this document created by the user
+    const sharesQuery = db.collection('shares')
+      .where('documentId', '==', documentId)
+      .where('createdBy', '==', uid)
+      .orderBy('createdAt', 'desc')
+      .limit(1);
+
+    const sharesSnapshot = await sharesQuery.get();
+
+    if (sharesSnapshot.empty) {
+      // This is the expected case when no share has been created yet.
+      return res.status(404).send({ message: 'No share link found for this document.' });
+    }
+
+    const latestShare = sharesSnapshot.docs[0];
+    const shareData = latestShare.data();
+
+    res.status(200).json({
+      shareUrl: `/documents/share/${latestShare.id}`,
+      shareConfig: shareData.config,
+      expiresAt: shareData.expiresAt.toDate().toISOString()
+    });
+  } catch (error) {
+    console.error('Error fetching latest share:', error);
+    res.status(500).send({ message: 'Error fetching share information' });
+  }
+});
+
+// Get all shares for a document
+app.get('/api/documents/:documentId/shares', authMiddleware, async (req, res) => {
+  try {
+    const { uid } = req.user;
+    const { documentId } = req.params;
+
+    // Verify document ownership
+    const docRef = db.collection('documents').doc(documentId);
+    const doc = await docRef.get();
+
+    if (!doc.exists) {
+      return res.status(404).send({ message: 'Document not found.' });
+    }
+
+    if (doc.data().userId !== uid) {
+      return res.status(403).send({ message: 'Forbidden: You do not own this document.' });
+    }
+
+    // Get all shares for this document
+    const sharesSnapshot = await db.collection('shares')
+      .where('documentId', '==', documentId)
+      .where('createdBy', '==', uid)
+      .get();
+
+    const shares = sharesSnapshot.docs.map(share => ({
+      shareToken: share.id,
+      ...share.data(),
+      shareUrl: `${process.env.FRONTEND_URL || 'https://resume.birajgautam.com.np'}/shared/${share.id}`
+    }));
+
+    res.status(200).json(shares);
+  } catch (error) {
+    console.error('Error fetching shares:', error);
+    res.status(500).send({ message: 'Error fetching shares' });
+  }
+});
+
+// Delete a share
+app.delete('/api/documents/:documentId/shares/:shareToken', authMiddleware, async (req, res) => {
+  try {
+    const { uid } = req.user;
+    const { documentId, shareToken } = req.params;
+
+    // Get the share
+    const shareRef = db.collection('shares').doc(shareToken);
+    const share = await shareRef.get();
+
+    if (!share.exists) {
+      return res.status(404).send({ message: 'Share not found.' });
+    }
+
+    // Verify ownership
+    if (share.data().createdBy !== uid || share.data().documentId !== documentId) {
+      return res.status(403).send({ message: 'Forbidden: You do not own this share.' });
+    }
+
+    // Delete the share
+    await shareRef.delete();
+
+    res.status(200).json({ message: 'Share deleted successfully.' });
+  } catch (error) {
+    console.error('Error deleting share:', error);
+    res.status(500).send({ message: 'Error deleting share' });
+  }
+});
+
+// Public endpoint to view shared documents
+// Public endpoint to view shared documents (legacy path)
+app.get('/api/shared/:shareToken', async (req, res) => {
+  try {
+    const { shareToken } = req.params;
+    const response = await fetchSharedDocumentData(shareToken);
+    res.status(200).json(response);
+  } catch (error) {
+    console.error('Error fetching shared document:', error);
+    res.status(error.status || 500).send({ message: error.message || 'Error fetching shared document' });
+  }
+});
+
+// Public endpoint to view shared documents (frontend expects this path)
+app.get('/api/documents/share/:shareToken', async (req, res) => {
+  try {
+    const { shareToken } = req.params;
+    const response = await fetchSharedDocumentData(shareToken);
+    res.status(200).json(response);
+  } catch (error) {
+    console.error('Error fetching shared document:', error);
+    res.status(error.status || 500).send({ message: error.message || 'Error fetching shared document' });
   }
 });
 

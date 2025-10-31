@@ -531,18 +531,6 @@ app.delete('/api/documents/:documentId/shares/:shareToken', authMiddleware, asyn
   }
 });
 
-// Public endpoint to view shared documents
-// Public endpoint to view shared documents (legacy path)
-app.get('/api/shared/:shareToken', async (req, res) => {
-  try {
-    const { shareToken } = req.params;
-    const response = await fetchSharedDocumentData(shareToken);
-    res.status(200).json(response);
-  } catch (error) {
-    console.error('Error fetching shared document:', error);
-    res.status(error.status || 500).send({ message: error.message || 'Error fetching shared document' });
-  }
-});
 
 // Public endpoint to view shared documents (frontend expects this path)
 app.get('/api/documents/share/:shareToken', async (req, res) => {
@@ -555,6 +543,70 @@ app.get('/api/documents/share/:shareToken', async (req, res) => {
     res.status(error.status || 500).send({ message: error.message || 'Error fetching shared document' });
   }
 });
+
+// --- NEW ---
+// Public endpoint to DOWNLOAD a shared document as PDF
+app.get('/api/documents/share/:shareToken/download', async (req, res) => {
+  try {
+    const { shareToken } = req.params;
+    const { resume, cover_letter } = req.query; // Allow choosing which to download
+
+    // 1. Fetch the shared data
+    const sharedData = await fetchSharedDocumentData(shareToken);
+
+    let markdownContent = '';
+    const baseFilename = sharedData.companyName || 'document';
+    let filename = `${baseFilename}.pdf`; // Default filename
+    const hasResume = resume === 'true' && sharedData.resumeMarkdown;
+    const hasCoverLetter = cover_letter === 'true' && sharedData.coverLetterMarkdown;
+
+    // 2. Combine content based on query params
+    if (hasResume) {
+      markdownContent += sharedData.resumeMarkdown;
+    }
+    if (hasCoverLetter) {
+      if (markdownContent) markdownContent += '\n\n---\n\n'; // Add separator
+      markdownContent += sharedData.coverLetterMarkdown;
+    }
+
+    // Adjust filename based on content
+    if (hasResume && hasCoverLetter) {
+      filename = `${baseFilename}-application.pdf`;
+    } else if (hasResume) {
+      filename = `${baseFilename}-resume.pdf`;
+    } else if (hasCoverLetter) {
+      filename = `${baseFilename}-cover-letter.pdf`;
+    }
+
+    if (!markdownContent) {
+      return res.status(400).send({ message: 'No content available to download for the selected options.' });
+    }
+
+    // 3. Generate PDF (similar to the authenticated route)
+    const htmlContent = md.render(markdownContent);
+    const pdfStyles = fs.readFileSync('./pdf-styles.css', 'utf8');
+    const fullHtml = `
+      <!DOCTYPE html><html><head><meta charset="utf-8"><style>${pdfStyles}</style></head>
+      <body><div class="resume-preview">${htmlContent}</div></body></html>`;
+
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+
+    wkhtmltopdf(fullHtml, {
+      pageSize: 'A4',
+      marginTop: '30px',
+      marginRight: '30px',
+      marginBottom: '30px',
+      marginLeft: '30px',
+      disableSmartShrinking: true
+    }).pipe(res);
+
+  } catch (error) {
+    console.error('Error generating shared PDF:', error);
+    res.status(error.status || 500).send({ message: error.message || 'Error generating shared PDF' });
+  }
+});
+
 
 // --- CHANGE 4: The server startup is now much simpler ---
 app.listen(PORT, () => {

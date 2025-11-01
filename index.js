@@ -308,7 +308,8 @@ async function fetchSharedDocumentData(shareToken) {
   const documentData = docSnap.data();
   const response = {
     companyName: documentData.companyName,
-    positionName: documentData.positionName
+    positionName: documentData.positionName,
+    isEditable: !!shareData.isEditable // --- ADD THIS LINE ---
   };
 
   // Only include permitted sections based on share configuration
@@ -330,11 +331,11 @@ app.post('/api/documents/:documentId/share', authMiddleware, async (req, res) =>
   try {
     const { uid } = req.user;
     const { documentId } = req.params;
-    const { resumeMarkdown, coverLetterMarkdown, notes } = req.body;
+    const { resumeMarkdown, coverLetterMarkdown, notes, isEditable } = req.body; 
 
     // Basic input validation
     const isBool = v => typeof v === 'boolean' || v === undefined || v === null;
-    if (!isBool(resumeMarkdown) || !isBool(coverLetterMarkdown) || !isBool(notes)) {
+    if (!isBool(resumeMarkdown) || !isBool(coverLetterMarkdown) || !isBool(notes) || !isBool(isEditable)) {
       return res.status(400).send({ message: 'Invalid share configuration. Expected boolean values.' });
     }
 
@@ -376,7 +377,8 @@ app.post('/api/documents/:documentId/share', authMiddleware, async (req, res) =>
       await shareRef.update({
         config: newConfig,
         updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-        expiresAt: newExpiresAt
+        expiresAt: newExpiresAt,
+        isEditable: !!isEditable
       });
 
       const shareUrl = `/documents/share/${existingShare.id}`;
@@ -404,7 +406,8 @@ app.post('/api/documents/:documentId/share', authMiddleware, async (req, res) =>
         createdBy: uid,
         expiresAt: admin.firestore.Timestamp.fromDate(
           new Date(Date.now() + 30 * 24 * 60 * 60 * 1000) // 30 days from now
-        )
+        ),
+        isEditable: !!isEditable
       };
 
       await db.collection('shares').doc(shareToken).set(shareData);
@@ -528,6 +531,62 @@ app.delete('/api/documents/:documentId/shares/:shareToken', authMiddleware, asyn
   } catch (error) {
     console.error('Error deleting share:', error);
     res.status(500).send({ message: 'Error deleting share' });
+  }
+});
+
+// --- NEW ---
+// Public endpoint to UPDATE a shared document
+app.put('/api/documents/share/:shareToken', async (req, res) => {
+  try {
+    const { shareToken } = req.params;
+    const { resumeMarkdown, coverLetterMarkdown, notes } = req.body;
+
+    // 1. Fetch the share record
+    const shareRef = db.collection('shares').doc(shareToken);
+    const shareSnap = await shareRef.get();
+
+    if (!shareSnap.exists) {
+      return res.status(404).send({ message: 'Share link not found or has expired.' });
+    }
+
+    const shareData = shareSnap.data();
+
+    // 2. CRITICAL: Security check for editability
+    if (!shareData.isEditable) {
+      return res.status(403).send({ message: 'Forbidden: This document is not editable.' });
+    }
+
+    // 3. Check for expiration
+    if (shareData.expiresAt && shareData.expiresAt.toDate() < new Date()) {
+      return res.status(410).send({ message: 'This share link has expired.' });
+    }
+
+    // 4. Prepare the data to update, respecting the original share configuration
+    const updatableData = {
+      updatedAt: admin.firestore.FieldValue.serverTimestamp()
+    };
+
+    if (shareData.config.resumeMarkdown && resumeMarkdown !== undefined) {
+      updatableData.resumeMarkdown = resumeMarkdown;
+    }
+    if (shareData.config.coverLetterMarkdown && coverLetterMarkdown !== undefined) {
+      updatableData.coverLetterMarkdown = coverLetterMarkdown;
+    }
+    if (shareData.config.notes && notes !== undefined) {
+      updatableData.notes = notes;
+    }
+
+    // 5. Update the original document
+    const docRef = db.collection('documents').doc(shareData.documentId);
+    // We don't need to check if the doc exists here, as it's implied by the share's existence.
+    // If it was deleted, the update will fail, which is correct.
+    await docRef.update(updatableData);
+
+    res.status(200).json({ message: 'Document updated successfully.' });
+
+  } catch (error) {
+    console.error('Error updating shared document:', error);
+    res.status(500).send({ message: 'An error occurred while updating the document.' });
   }
 });
 

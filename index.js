@@ -59,15 +59,21 @@ app.get('/', (req, res) => {
     message: 'Welcome to the ResumeForge API!',
     status: 'Service is running',
     timestamp: new Date().toISOString(),
-    documentation: 'For API usage, please refer to the project documentation.'
   });
 });
+
 app.get('/api/documents', authMiddleware, async (req, res) => {
   try {
     const { uid } = req.user;
-    const { fields } = req.query;
+    const { fields, status } = req.query;
     
-    const documentsSnapshot = await db.collection('documents').where('userId', '==', uid).get();
+    let query = db.collection('documents').where('userId', '==', uid);
+
+    // If a status filter is provided (and it's not 'All'), add it to the query
+    if (status && status !== 'All') {
+      query = query.where('status', '==', status);
+    }
+    const documentsSnapshot = await query.get();
     
     let documents;
     if (fields) {
